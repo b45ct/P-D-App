@@ -650,21 +650,28 @@ async function confirmSO(){
   showLoading('Confirming order...');
   try {
     await odooCall('sale.order','action_confirm',[[curSO.odooId]],{});
-    // Create invoice via wizard — [6,0,[id]] = "set this list" (correct many2many command)
+    // Create invoice directly via account.move — bypasses product invoicing policy
     try {
-      const wizardId = await odooCall('sale.advance.payment.inv','create',[{
-        advance_payment_method: 'delivered',
-        sale_order_ids: [[6, 0, [curSO.odooId]]],
-      }],{context:{active_ids:[curSO.odooId],active_model:'sale.order',active_id:curSO.odooId}});
-      await odooCall('sale.advance.payment.inv','create_invoices',[[wizardId]],
-        {context:{active_ids:[curSO.odooId],active_model:'sale.order',active_id:curSO.odooId}});
-      // Fetch the invoice that was just created
-      const soData = await odooCall('sale.order','read',[[curSO.odooId]],{fields:['invoice_ids']});
-      if(soData[0].invoice_ids && soData[0].invoice_ids.length){
-        const invId = soData[0].invoice_ids[0];
-        await odooCall('account.move','action_post',[[invId]],{});
-        curSO._invId = invId;
-      }
+      const soLines = await odooCall('sale.order.line','search_read',
+        [[['order_id','=',curSO.odooId]]],
+        {fields:['id','product_id','name','product_uom_qty','price_unit','tax_id'],limit:100}
+      );
+      const invoiceLines = soLines.map(l=>[0,0,{
+        product_id: l.product_id ? l.product_id[0] : false,
+        name: l.name,
+        quantity: l.product_uom_qty,
+        price_unit: l.price_unit,
+        tax_ids: l.tax_id && l.tax_id.length ? [[6,0,l.tax_id]] : [[6,0,[]]],
+        sale_line_ids: [[4, l.id]],
+      }]);
+      const invId = await odooCall('account.move','create',[{
+        move_type: 'out_invoice',
+        partner_id: curSO._partnerId,
+        invoice_origin: curSO.ref,
+        invoice_line_ids: invoiceLines,
+      }],{});
+      await odooCall('account.move','action_post',[[invId]],{});
+      curSO._invId = invId;
     } catch(e2){ showErr('Invoice error: '+e2.message); }
     curSO.status='confirmed';
     renderSalesDet();renderTabs();
@@ -754,14 +761,14 @@ async function markPaid(){
     let invId = curSO._invId;
     if(!invId){showErr('No invoice found. Please confirm the order first.');hideLoading();return;}
     const journalId = JOURNAL_MAP[curSO.payMethod] || 16;
-    // Create the payment register wizard, linked to the invoice via context
+    // Create payment register wizard linked to the invoice via context
     const wizardId = await odooCall('account.payment.register','create',[{
       amount: cappedAmount,
       journal_id: journalId,
       payment_date: new Date().toISOString().slice(0,10),
       communication: curSO.ref,
     }],{context:{active_model:'account.move',active_ids:[invId]}});
-    // Post the payment — this actually reconciles it against the invoice
+    // Post the payment — reconciles it against the invoice
     await odooCall('account.payment.register','action_create_payments',[[wizardId]],
       {context:{active_model:'account.move',active_ids:[invId]}});
     // Track locally
