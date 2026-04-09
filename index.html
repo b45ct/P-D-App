@@ -709,7 +709,7 @@ async function markPaid(){
     // Get or create invoice
     let invId = curSO._invId;
     if(!invId){
-      const invIds = await odooCall('sale.order','_create_invoices',[[curSO.odooId]],{});
+      const invIds = await odooCall('sale.order','action_invoice_create',[[curSO.odooId]],{});
       invId = Array.isArray(invIds) ? invIds[0] : invIds;
       await odooCall('account.move','action_post',[[invId]],{});
       curSO._invId = invId;
