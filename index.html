@@ -390,23 +390,42 @@ async function loadSalesOrders() {
     }));
     const stateMap = {draft:'draft', sale:'confirmed', done:'paid'};
     const isPaid = o.state==='done';
+    // Get payments from invoices
+    let amtPaid = 0;
+    let payments = [];
+    let invId = null;
+    if(o.invoice_ids && o.invoice_ids.length) {
+      invId = o.invoice_ids[0];
+      try {
+        const invs = await odooCall('account.move','search_read',
+          [[['id','in',o.invoice_ids],['state','=','posted']]],
+          {fields:['id','amount_residual','amount_total','payment_state'],limit:10}
+        );
+        invs.forEach(inv => {
+          amtPaid += (inv.amount_total - inv.amount_residual);
+        });
+      } catch(e){}
+    }
+    const status = amtPaid >= o.amount_total && o.amount_total > 0 ? 'paid' : (o.state==='sale'?'confirmed':'draft');
     salesOrders[coKey].push({
       id: o.id,
       ref: o.name,
       customer: o.partner_id[1],
       address: o.x_studio_shipping_address_4 || '',
       products: oLines,
-      carrier: o.carrier_id ? o.carrier_id[1] : 'UPS',
+      carrier: 'UPS',
       on: !!o.x_studio_on,
       twoday: !!o.x_studio_2day,
       pk: o.x_studio_pk||0, c:o.x_studio_c||0, z:o.x_studio_z||0, d:o.x_studio_d||0,
       payMethod: 'Zelle',
-      status: isPaid ? 'paid' : (o.state==='sale'?'confirmed':'draft'),
+      status: status,
       date: (o.date_order||'').slice(0,10),
       subtotal: o.amount_total,
       discount: 0,
       total: o.amount_total,
-      amountPaid: isPaid ? o.amount_total : 0,
+      amountPaid: amtPaid,
+      payments: payments,
+      _invId: invId,
       odooId: o.id,
     });
   });
