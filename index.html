@@ -650,6 +650,15 @@ async function confirmSO(){
   try {
     await odooAuth();
     await odooCall('sale.order','action_confirm',[[curSO.odooId]],{});
+    // Create and post invoice immediately after confirming
+    try {
+      const invIds = await odooCall('sale.order','action_invoice_create',[[curSO.odooId]],{});
+      const invId = Array.isArray(invIds) ? invIds[0] : invIds;
+      if(invId){
+        await odooCall('account.move','action_post',[[invId]],{});
+        curSO._invId = invId;
+      }
+    } catch(e2){ /* invoice creation optional, continue */ }
     curSO.status='confirmed';
     renderSalesDet();renderTabs();
   } catch(e){ showErr('Failed to confirm: '+e.message); }
