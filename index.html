@@ -406,7 +406,7 @@ async function loadSalesOrders() {
 async function loadDeliveries() {
   const fields = ['id','name','origin','partner_id','state',
     'x_studio_delivery_address','x_studio_pk','x_studio_c','x_studio_z','x_studio_d',
-    'x_studio_on','x_studio_2day','carrier_id','move_ids','company_id'];
+    'x_studio_on','x_studio_2day','move_ids','company_id'];
   const picks = await odooCall('stock.picking','search_read',
     [[['picking_type_code','=','outgoing'],['state','in',['ready','assigned','waiting']]]],
     {fields, limit:200}
