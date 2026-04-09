@@ -660,7 +660,7 @@ async function confirmSO(){
       const invId = await odooCall('account.move','create',[{move_type:'out_invoice',invoice_origin:curSO.ref,partner_id:partnerId,invoice_line_ids:invLines}],{});
       await odooCall('account.move','action_post',[[invId]],{});
       curSO._invId = invId;
-    } catch(e2){ console.log('Invoice error:',e2.message); }
+    } catch(e2){ showErr('Invoice error: '+e2.message); }
     curSO.status='confirmed';
     renderSalesDet();renderTabs();
   } catch(e){ showErr('Failed to confirm: '+e.message); }
