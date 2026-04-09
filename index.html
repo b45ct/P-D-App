@@ -345,9 +345,9 @@ async function loadCustomers() {
 }
 
 async function loadSalesOrders() {
-  const fields = ['id','name','partner_id','state','amount_total','amount_residual',
+  const fields = ['id','name','partner_id','state','amount_total',
     'x_studio_shipping_address_4','x_studio_pk','x_studio_c','x_studio_z','x_studio_d',
-    'x_studio_on','x_studio_2day','carrier_id','order_line','company_id','date_order'];
+    'x_studio_on','x_studio_2day','order_line','company_id','date_order'];
   const orders = await odooCall('sale.order','search_read',
     [[['state','in',['draft','sale','done']]]],
     {fields, limit:200, order:'date_order desc'}
@@ -380,7 +380,7 @@ async function loadSalesOrders() {
       odooId: l.product_id[0]
     }));
     const stateMap = {draft:'draft', sale:'confirmed', done:'paid'};
-    const isPaid = o.amount_residual===0 && o.amount_total>0;
+    const isPaid = o.state==='done';
     salesOrders[coKey].push({
       id: o.id,
       ref: o.name,
