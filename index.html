@@ -652,13 +652,15 @@ async function confirmSO(){
     await odooCall('sale.order','action_confirm',[[curSO.odooId]],{});
     // Create and post invoice immediately after confirming
     try {
-      const invIds = await odooCall('sale.order','action_invoice_create',[[curSO.odooId]],{});
-      const invId = Array.isArray(invIds) ? invIds[0] : invIds;
-      if(invId){
-        await odooCall('account.move','action_post',[[invId]],{});
-        curSO._invId = invId;
-      }
-    } catch(e2){ /* invoice creation optional, continue */ }
+      const orderData = await odooCall('sale.order','read',[[curSO.odooId]],{fields:['partner_id','order_line']});
+      const partnerId = orderData[0].partner_id[0];
+      const lineIds = orderData[0].order_line;
+      const lines = await odooCall('sale.order.line','read',[lineIds],{fields:['name','product_uom_qty','price_unit','product_id']});
+      const invLines = lines.map(l=>[0,0,{name:l.name,quantity:l.product_uom_qty,price_unit:l.price_unit,product_id:l.product_id?l.product_id[0]:false}]);
+      const invId = await odooCall('account.move','create',[{move_type:'out_invoice',invoice_origin:curSO.ref,partner_id:partnerId,invoice_line_ids:invLines}],{});
+      await odooCall('account.move','action_post',[[invId]],{});
+      curSO._invId = invId;
+    } catch(e2){ console.log('Invoice error:',e2.message); }
     curSO.status='confirmed';
     renderSalesDet();renderTabs();
   } catch(e){ showErr('Failed to confirm: '+e.message); }
@@ -718,7 +720,7 @@ async function markPaid(){
     // Get or create invoice
     let invId = curSO._invId;
     if(!invId){
-      const invIds = await odooCall('sale.order','action_invoice_create',[[curSO.odooId]],{});
+      const invIds = await odooCall('sale.order','_create_invoices',[[curSO.odooId]],{'final':False});
       invId = Array.isArray(invIds) ? invIds[0] : invIds;
       await odooCall('account.move','action_post',[[invId]],{});
       curSO._invId = invId;
