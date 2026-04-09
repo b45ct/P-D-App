@@ -613,6 +613,7 @@ function renderSalesDet(){
     '<div class="pr" style="background:#f9f9f9;"><div class="pi"><div class="pn" style="font-weight:600;">Total</div></div><div style="font-size:15px;font-weight:600;color:#111;">'+fmt(total)+'</div></div></div>'+
     (!isPaid?'<div class="abar">'+
       (canConf?'<button class="abtn bc" onclick="confirmSO()">Confirm Order</button>':'<button class="abtn boff">Confirm Order</button>')+
+      (!isPaid?'<button class="abtn" id="cancel-btn" style="background:#fee2e2;color:#991b1b;border:none;" onclick="cancelStep()">Cancel Order</button>':'')+
       (canPay?'<div class="ablbl">Payment Method</div>'+
         '<div class="pmg" id="pm-g">'+PAY_METHODS.map(m=>'<button class="pm" id="pm-'+m+'" onclick="selPM(\''+m+'\')" style="'+(o.payMethod===m?'background:#111;color:#fff;border-color:#111;':'')+'">'+m+'</button>').join('')+'</div>'+
         '<div class="partwrap"><div class="partlbl">Amount Received</div>'+
@@ -630,6 +631,39 @@ async function confirmSO(){
     curSO.status='confirmed';
     renderSalesDet();renderTabs();
   } catch(e){ showErr('Failed to confirm: '+e.message); }
+  hideLoading();
+}
+
+let _cancelReady = false;
+function cancelStep(){
+  const btn = document.getElementById('cancel-btn');
+  if(!btn) return;
+  if(!_cancelReady){
+    _cancelReady = true;
+    btn.textContent = 'This cannot be undone — tap again to confirm';
+    btn.style.background = '#ef4444';
+    btn.style.color = '#fff';
+    // Reset after 4 seconds if not confirmed
+    setTimeout(()=>{
+      _cancelReady = false;
+      if(btn){btn.textContent='Cancel Order';btn.style.background='#fee2e2';btn.style.color='#991b1b';}
+    }, 4000);
+  } else {
+    _cancelReady = false;
+    cancelSO();
+  }
+}
+
+async function cancelSO(){
+  showLoading('Cancelling order...');
+  try {
+    await odooAuth();
+    await odooCall('sale.order','action_cancel',[[curSO.odooId]],{});
+    const list = salesOrders[curCo];
+    const idx = list.findIndex(o=>o.ref===curSO.ref);
+    if(idx>-1) list.splice(idx,1);
+    goBackS();
+  } catch(e){ showErr('Failed to cancel: '+e.message); }
   hideLoading();
 }
 
