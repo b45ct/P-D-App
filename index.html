@@ -214,6 +214,7 @@ let companyMap = {pup: null, bf: null, wu: null};
 
 // ── ODOO API ──
 async function odooCall(model, method, args, kwargs={}) {
+  const uid = await odooAuth();
   const res = await fetch(proxyUrl(ODOO_URL + '/web/dataset/call_kw'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -222,7 +223,9 @@ async function odooCall(model, method, args, kwargs={}) {
       params: {
         model, method,
         args, kwargs,
-        context: {}
+        context: {},
+        uid: uid,
+        password: ODOO_KEY,
       }
     }),
   });
@@ -231,7 +234,9 @@ async function odooCall(model, method, args, kwargs={}) {
   return data.result;
 }
 
+let _uid = null;
 async function odooAuth() {
+  if (_uid) return _uid;
   const res = await fetch(proxyUrl(ODOO_URL + '/web/session/authenticate'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -242,7 +247,8 @@ async function odooAuth() {
   });
   const data = await res.json();
   if (!data.result?.uid) throw new Error('Authentication failed');
-  return data.result.uid;
+  _uid = data.result.uid;
+  return _uid;
 }
 
 // ── APP STATE ──
