@@ -203,6 +203,8 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 <script>
 // ── ODOO CONFIG ──
 const ODOO_URL = 'https://newempire.odoo.com';
+const PROXY = 'https://corsproxy.io/?';
+function proxyUrl(url){ return PROXY + encodeURIComponent(url); }
 const ODOO_DB  = 'newempire';
 const ODOO_USER = 'b45ct';
 const ODOO_KEY  = '63cf6933dd137e43743ac80ca72d1e2ef14b61b2';
@@ -212,7 +214,7 @@ let companyMap = {pup: null, bf: null, wu: null};
 
 // ── ODOO API ──
 async function odooCall(model, method, args, kwargs={}) {
-  const res = await fetch(ODOO_URL + '/web/dataset/call_kw', {
+  const res = await fetch(proxyUrl(ODOO_URL + '/web/dataset/call_kw'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -231,7 +233,7 @@ async function odooCall(model, method, args, kwargs={}) {
 }
 
 async function odooAuth() {
-  const res = await fetch(ODOO_URL + '/web/session/authenticate', {
+  const res = await fetch(proxyUrl(ODOO_URL + '/web/session/authenticate'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
