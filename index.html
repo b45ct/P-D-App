@@ -151,10 +151,19 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 .total-divider{border:none;border-top:1px solid #e5e5e5;margin:6px 0;}
 .subbtn{width:100%;padding:16px;font-size:16px;font-weight:600;border:none;border-radius:14px;background:#111;color:#fff;cursor:pointer;font-family:inherit;margin-top:6px;}
 .subbtn:active{background:#333;}
+.loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;font-size:15px;color:#555;gap:12px;}
+.spinner{width:32px;height:32px;border:3px solid #e5e5e5;border-top-color:#111;border-radius:50%;animation:spin 0.7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.sync-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#f0fdf4;border-bottom:1px solid #86efac;font-size:12px;color:#166534;}
+.sync-btn{padding:5px 12px;font-size:12px;font-weight:600;border:1px solid #22c55e;border-radius:8px;background:#fff;color:#16a34a;cursor:pointer;font-family:inherit;}
+.err-bar{padding:10px 16px;background:#fee2e2;border-bottom:1px solid #fca5a5;font-size:12px;color:#991b1b;display:none;}
 </style>
 </head>
 <body>
-
+<div id="loading" class="loading-overlay" style="display:none;">
+  <div class="spinner"></div>
+  <span id="loading-msg">Loading...</span>
+</div>
 <div id="ds" class="screen active">
   <div class="hdr">
     <div class="htop"><span>P&amp;D</span>
@@ -165,366 +174,137 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
     </div>
     <div class="tabs" id="tabs"></div>
   </div>
+  <div id="sync-bar" class="sync-bar" style="display:none;">
+    <span id="sync-msg">Last synced just now</span>
+    <button class="sync-btn" onclick="syncAll()">&#8635; Refresh</button>
+  </div>
+  <div id="err-bar" class="err-bar"></div>
   <div id="fab-row"></div>
   <div id="panel"></div>
 </div>
-
 <div id="det" class="screen">
   <div class="dtop"><button class="bk" onclick="goBack()">&#8592;</button><div class="dinfo"><div class="dref" id="d-ref"></div><div class="dsub" id="d-so"></div></div></div>
   <div id="det-c"></div>
 </div>
-
 <div id="sdet" class="screen">
   <div class="dtop"><button class="bk" onclick="goBackS()">&#8592;</button><div class="dinfo"><div class="dref" id="sd-ref"></div><div class="dsub" id="sd-sub"></div></div></div>
   <div id="sdet-c"></div>
 </div>
-
 <div id="nord" class="screen">
   <div class="dtop"><button class="bk" onclick="closeNew()">&#8592;</button><div class="dinfo"><div class="dref">New Order</div><div class="dsub" id="no-co"></div></div></div>
   <div class="fw" id="nform"></div>
 </div>
-
 <script>
+const ODOO_URL='https://newempire.odoo.com';
+const ODOO_DB='newempire';
+const ODOO_USER='b45ct';
+const ODOO_KEY='63cf6933dd137e43743ac80ca72d1e2ef14b61b2';
+let companyMap={pup:null,bf:null,wu:null};
+async function odooCall(model,method,args,kwargs={}){
+  const res=await fetch(ODOO_URL+'/web/dataset/call_kw',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',method:'call',id:1,params:{model,method,args,kwargs,context:{}}}),credentials:'include'});
+  const data=await res.json();if(data.error)throw new Error(data.error.data?.message||JSON.stringify(data.error));return data.result;
+}
+async function odooAuth(){
+  const res=await fetch(ODOO_URL+'/web/session/authenticate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',method:'call',id:1,params:{db:ODOO_DB,login:ODOO_USER,password:ODOO_KEY}}),credentials:'include'});
+  const data=await res.json();if(!data.result?.uid)throw new Error('Authentication failed');return data.result.uid;
+}
 let mode='sales',atab='pup',curO=null,curCo=null,curSO=null;
-const done=[];let soN=103;
-let fProds=[],selOn=false,sel2d=false,selPay='Zelle',runTotal=0,discount=0,selProdPrice=null;
-
+const done=[];let soN=1000;
+let fProds=[],selOn=false,sel2d=false,selPay='Zelle',runTotal=0,discount=0,selProdPrice=null,selProdOdooId=null;
+let salesOrders={pup:[],bf:[],wu:[]};
+let pndOrders={pup:[],bf:[],wu:[]};
+let odooProducts=[],odooCustomers=[];
 const PND_COS=[{id:'pup',name:'PUP',bc:'bp'},{id:'bf',name:'BF',bc:'bb'},{id:'wu',name:'WU',bc:'bw'},{id:'done',name:'Completed',bc:'bd'}];
 const S_COS=[{id:'pup',name:'PUP',bc:'bp'},{id:'bf',name:'BF',bc:'bb'},{id:'wu',name:'WU',bc:'bw'}];
-const PRODS=[
-  {name:'Wireless Headphones Pro',price:89.99},{name:'Phone Case Black',price:19.99},{name:'USB-C Cable 6ft',price:12.99},
-  {name:'Screen Protector',price:9.99},{name:'Laptop Stand Aluminum',price:54.99},{name:'Mechanical Keyboard',price:79.99},
-  {name:'Mouse Pad XL',price:24.99},{name:'Bluetooth Speaker',price:49.99},{name:'Resistance Bands Set',price:24.99},
-  {name:'Yoga Mat',price:45.00},{name:'Water Bottle 32oz',price:18.99},{name:'Jump Rope Pro',price:29.99},
-  {name:'Foam Roller',price:34.99},{name:'Desk Organizer Set',price:32.00},{name:'Sticky Notes Pack',price:8.99},
-  {name:'Candle Set Vanilla',price:32.00},{name:'Gift Box Large',price:18.00},{name:'Ceramic Mug Set',price:44.99},
-  {name:'Tea Sampler Box',price:22.99},{name:'Scented Lotion Set',price:38.00},{name:'Bath Bomb Pack',price:29.99},
-];
-const CUSTS=['Maria Torres','James Liu','Ana Reyes','Robert Kim','Derek Stone','Priya Nair','Kevin Walsh','Sandra Mejia','Carlos Vega','Lisa Park','Tom Brennan','Rachel Moore','David Chen','Sofia Alvarez','Mark Johnson'];
-
-const pnd={
-  pup:[
-    {ref:'WH/OUT/00041',so:'S00089',customer:'Maria Torres',address:'1242 Elm St, Los Angeles CA 90001',pk:3,c:5,z:2,d:0,on:true,twoday:false,carrier:'UPS',done:false,products:[{name:'Wireless Headphones Pro',demand:2,packed:0},{name:'Phone Case Black',demand:3,packed:0},{name:'USB-C Cable 6ft',demand:4,packed:0}]},
-    {ref:'WH/OUT/00042',so:'S00091',customer:'James Liu',address:'800 Sunset Blvd, Hollywood CA 90028',pk:1,c:0,z:1,d:1,on:false,twoday:true,carrier:'FedEx',done:false,products:[{name:'Laptop Stand Aluminum',demand:1,packed:0},{name:'Mechanical Keyboard',demand:1,packed:0},{name:'Mouse Pad XL',demand:2,packed:0}]},
-    {ref:'WH/OUT/00043',so:'S00094',customer:'Ana Reyes',address:'55 W 7th St, LA CA 90014',pk:2,c:3,z:0,d:0,on:false,twoday:false,carrier:'USPS',done:false,products:[{name:'Notebook A5 Pack',demand:3,packed:0},{name:'Pen Set Blue',demand:2,packed:0},{name:'Sticky Notes',demand:4,packed:0}]},
-    {ref:'WH/OUT/00044',so:'S00097',customer:'Robert Kim',address:'3200 Wilshire Blvd, LA CA 90010',pk:0,c:2,z:2,d:1,on:true,twoday:false,carrier:'DHL',done:false,products:[{name:'Bluetooth Speaker',demand:1,packed:0},{name:'Charging Dock',demand:1,packed:0},{name:'Cable Organizer',demand:3,packed:0}]},
-  ],
-  bf:[
-    {ref:'BF/OUT/00018',so:'S00077',customer:'Derek Stone',address:'1900 N Vermont Ave, LA CA 90027',pk:0,c:8,z:3,d:2,on:true,twoday:false,carrier:'DHL',done:false,products:[{name:'Resistance Bands Set',demand:4,packed:0},{name:'Yoga Mat Purple',demand:2,packed:0},{name:'Water Bottle 32oz',demand:3,packed:0}]},
-    {ref:'BF/OUT/00019',so:'S00081',customer:'Priya Nair',address:'3300 Wilshire Blvd, LA CA 90010',pk:4,c:2,z:0,d:0,on:false,twoday:false,carrier:'UPS',done:false,products:[{name:'Jump Rope Pro',demand:2,packed:0},{name:'Foam Roller',demand:1,packed:0},{name:'Gym Gloves M',demand:2,packed:0}]},
-    {ref:'BF/OUT/00020',so:'S00085',customer:'Kevin Walsh',address:'470 S Figueroa St, LA CA 90071',pk:1,c:4,z:1,d:0,on:false,twoday:true,carrier:'FedEx',done:false,products:[{name:'Kettlebell 25lb',demand:1,packed:0},{name:'Ab Roller',demand:1,packed:0},{name:'Exercise Mat',demand:2,packed:0}]},
-    {ref:'BF/OUT/00021',so:'S00088',customer:'Sandra Mejia',address:'1010 S Flower St, LA CA 90015',pk:2,c:1,z:2,d:1,on:true,twoday:false,carrier:'USPS',done:false,products:[{name:'Pull Up Bar',demand:1,packed:0},{name:'Resistance Loop Set',demand:3,packed:0},{name:'Sports Bottle',demand:2,packed:0}]},
-  ],
-  wu:[
-    {ref:'WU/OUT/00007',so:'S00060',customer:'Carlos Vega',address:'400 S Spring St, LA CA 90013',pk:1,c:1,z:1,d:1,on:false,twoday:true,carrier:'FedEx',done:false,products:[{name:'Desk Organizer Set',demand:1,packed:0},{name:'Sticky Notes Pack',demand:3,packed:0},{name:'Pen Holder Bamboo',demand:1,packed:0}]},
-    {ref:'WU/OUT/00008',so:'S00063',customer:'Lisa Park',address:'220 E 6th St, LA CA 90014',pk:2,c:0,z:2,d:0,on:true,twoday:false,carrier:'USPS',done:false,products:[{name:'Candle Set Vanilla',demand:2,packed:0},{name:'Gift Box Large',demand:2,packed:0},{name:'Ribbon Pack',demand:1,packed:0}]},
-    {ref:'WU/OUT/00009',so:'S00067',customer:'Tom Brennan',address:'999 Alameda St, LA CA 90012',pk:0,c:4,z:0,d:3,on:false,twoday:false,carrier:'DHL',done:false,products:[{name:'Ceramic Mug Set',demand:4,packed:0},{name:'Tea Sampler Box',demand:1,packed:0},{name:'Honey Jar Set',demand:2,packed:0}]},
-    {ref:'WU/OUT/00010',so:'S00071',customer:'Rachel Moore',address:'1600 N Highland Ave, Hollywood CA 90028',pk:1,c:2,z:1,d:0,on:false,twoday:true,carrier:'UPS',done:false,products:[{name:'Scented Lotion Set',demand:2,packed:0},{name:'Bath Bomb Pack',demand:3,packed:0},{name:'Face Mask Set',demand:2,packed:0}]},
-  ],
-};
-
-const sales={
-  pup:[
-    {ref:'S00102',customer:'David Chen',address:'500 N Figueroa St, LA CA 90012',products:[{name:'Wireless Headphones Pro',qty:2,price:89.99},{name:'USB-C Cable 6ft',qty:3,price:12.99}],carrier:'UPS',on:false,twoday:true,pk:1,c:2,z:0,d:0,payMethod:'Zelle',status:'confirmed',date:'2026-04-08',subtotal:305.94,discount:0,total:305.94,amountPaid:0},
-    {ref:'S00098',customer:'Sofia Alvarez',address:'1800 Vine St, Hollywood CA 90028',products:[{name:'Phone Case Black',qty:4,price:19.99},{name:'Screen Protector',qty:4,price:9.99}],carrier:'USPS',on:false,twoday:false,pk:2,c:3,z:0,d:0,payMethod:'CashApp',status:'draft',date:'2026-04-08',subtotal:119.92,discount:20,total:99.92,amountPaid:0},
-  ],
-  bf:[
-    {ref:'S00101',customer:'Mark Johnson',address:'222 S Hope St, LA CA 90012',products:[{name:'Yoga Mat',qty:2,price:45.00},{name:'Resistance Bands Set',qty:3,price:24.99}],carrier:'FedEx',on:true,twoday:false,pk:0,c:3,z:2,d:0,payMethod:'Zelle',status:'paid',date:'2026-04-07',subtotal:164.97,discount:0,total:164.97,amountPaid:164.97},
-    {ref:'S00099',customer:'Kevin Walsh',address:'470 S Figueroa St, LA CA 90071',products:[{name:'Jump Rope Pro',qty:1,price:29.99},{name:'Foam Roller',qty:2,price:34.99}],carrier:'UPS',on:false,twoday:false,pk:1,c:1,z:0,d:0,payMethod:'Cash',status:'draft',date:'2026-04-08',subtotal:99.97,discount:0,total:99.97,amountPaid:0},
-  ],
-  wu:[
-    {ref:'S00100',customer:'Rachel Moore',address:'1600 N Highland Ave, Hollywood CA 90028',products:[{name:'Candle Set Vanilla',qty:2,price:32.00},{name:'Gift Box Large',qty:1,price:18.00}],carrier:'USPS',on:false,twoday:true,pk:1,c:2,z:1,d:0,payMethod:'CCC',status:'confirmed',date:'2026-04-08',subtotal:82.00,discount:0,total:82.00,amountPaid:0},
-  ],
-};
-
-function fmt(n){return '$'+parseFloat(n||0).toFixed(2);}
-function pill(l,v){return '<span class="pill'+(v>0?' hv':'')+'">'+l+':'+v+'</span>';}
-function spill(s){const m={draft:'sp-d',confirmed:'sp-c',paid:'sp-p'};const l={draft:'Draft',confirmed:'Confirmed',paid:'Paid'};return '<span class="spill '+m[s]+'">'+l[s]+'</span>';}
+const PAY_METHODS=['Cash','CCC','CashApp','Zelle'];
+const JOURNAL_MAP={'Cash':16,'CCC':17,'CashApp':18,'Zelle':19};
+function fmt(n){return'$'+parseFloat(n||0).toFixed(2);}
+function pill(l,v){return'<span class="pill'+(v>0?' hv':'')+'">'+l+':'+v+'</span>';}
+function spill(s){const m={draft:'sp-d',confirmed:'sp-c',paid:'sp-p'};const l={draft:'Draft',confirmed:'Confirmed',paid:'Paid'};return'<span class="spill '+m[s]+'">'+l[s]+'</span>';}
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
+function showLoading(msg='Loading...'){document.getElementById('loading').style.display='flex';document.getElementById('loading-msg').textContent=msg;}
+function hideLoading(){document.getElementById('loading').style.display='none';}
+function showErr(msg){const b=document.getElementById('err-bar');b.textContent=msg;b.style.display='block';setTimeout(()=>b.style.display='none',5000);}
+async function syncAll(){
+  showLoading('Syncing with Odoo...');
+  try{await odooAuth();await Promise.all([loadCompanies(),loadProducts(),loadCustomers()]);await Promise.all([loadSalesOrders(),loadDeliveries()]);document.getElementById('sync-bar').style.display='flex';document.getElementById('sync-msg').textContent='Last synced: '+new Date().toLocaleTimeString();renderDash();}
+  catch(e){showErr('Sync failed: '+e.message);renderDash();}
+  hideLoading();
+}
+async function loadCompanies(){const cos=await odooCall('res.company','search_read',[[]],{fields:['id','name'],limit:50});cos.forEach(c=>{const n=c.name.toUpperCase();if(n.includes('PUP'))companyMap.pup=c.id;else if(n.includes('BF'))companyMap.bf=c.id;else if(n.includes('WU'))companyMap.wu=c.id;});}
+async function loadProducts(){odooProducts=await odooCall('product.product','search_read',[[['sale_ok','=',true]]],{fields:['id','name','lst_price'],limit:200});}
+async function loadCustomers(){odooCustomers=await odooCall('res.partner','search_read',[[['customer_rank','>',0]]],{fields:['id','name','street','city','state_id','zip'],limit:500});}
+async function loadSalesOrders(){
+  const fields=['id','name','partner_id','state','amount_total','amount_residual','x_studio_shipping_address_4','x_studio_pk','x_studio_c','x_studio_z','x_studio_d','x_studio_on','x_studio_2day','carrier_id','order_line','company_id','date_order'];
+  const orders=await odooCall('sale.order','search_read',[[['state','in',['draft','sale','done']]]],{fields,limit:200,order:'date_order desc'});
+  const lineIds=orders.flatMap(o=>o.order_line);let lines=[];
+  if(lineIds.length)lines=await odooCall('sale.order.line','search_read',[[['id','in',lineIds]]],{fields:['id','order_id','product_id','product_uom_qty','price_unit'],limit:1000});
+  const lineMap={};lines.forEach(l=>{if(!lineMap[l.order_id[0]])lineMap[l.order_id[0]]=[];lineMap[l.order_id[0]].push(l);});
+  salesOrders={pup:[],bf:[],wu:[]};
+  orders.forEach(o=>{const coId=o.company_id[0];const coKey=Object.keys(companyMap).find(k=>companyMap[k]===coId);if(!coKey)return;
+    const oLines=(lineMap[o.id]||[]).map(l=>({name:l.product_id[1],qty:l.product_uom_qty,price:l.price_unit,odooId:l.product_id[0]}));
+    const isPaid=o.amount_residual===0&&o.amount_total>0;
+    salesOrders[coKey].push({id:o.id,ref:o.name,customer:o.partner_id[1],address:o.x_studio_shipping_address_4||'',products:oLines,carrier:o.carrier_id?o.carrier_id[1]:'UPS',on:!!o.x_studio_on,twoday:!!o.x_studio_2day,pk:o.x_studio_pk||0,c:o.x_studio_c||0,z:o.x_studio_z||0,d:o.x_studio_d||0,payMethod:'Zelle',status:isPaid?'paid':(o.state==='sale'?'confirmed':'draft'),date:(o.date_order||'').slice(0,10),subtotal:o.amount_total,discount:0,total:o.amount_total,amountPaid:isPaid?o.amount_total:0,odooId:o.id});
+  });
+}
+async function loadDeliveries(){
+  const fields=['id','name','origin','partner_id','state','x_studio_delivery_address','x_studio_pk','x_studio_c','x_studio_z','x_studio_d','x_studio_on','x_studio_2day','carrier_id','move_ids','company_id'];
+  const picks=await odooCall('stock.picking','search_read',[[['picking_type_code','=','outgoing'],['state','in',['ready','assigned','waiting']]]],{fields,limit:200});
+  const moveIds=picks.flatMap(p=>p.move_ids);let moves=[];
+  if(moveIds.length)moves=await odooCall('stock.move','search_read',[[['id','in',moveIds]]],{fields:['id','picking_id','product_id','product_uom_qty'],limit:1000});
+  const moveMap={};moves.forEach(m=>{if(!moveMap[m.picking_id[0]])moveMap[m.picking_id[0]]=[];moveMap[m.picking_id[0]].push(m);});
+  pndOrders={pup:[],bf:[],wu:[]};
+  picks.forEach(p=>{const coId=p.company_id[0];const coKey=Object.keys(companyMap).find(k=>companyMap[k]===coId);if(!coKey)return;
+    const products=(moveMap[p.id]||[]).map(m=>({name:m.product_id[1],demand:m.product_uom_qty,packed:0}));
+    pndOrders[coKey].push({id:p.id,ref:p.name,so:p.origin||'',customer:p.partner_id?p.partner_id[1]:'',address:p.x_studio_delivery_address||'',pk:p.x_studio_pk||0,c:p.x_studio_c||0,z:p.x_studio_z||0,d:p.x_studio_d||0,on:!!p.x_studio_on,twoday:!!p.x_studio_2day,carrier:p.carrier_id?p.carrier_id[1]:'UPS',done:false,products,odooId:p.id});
+  });
+}
 function switchMode(m){mode=m;document.getElementById('mb-s').classList.toggle('active',m==='sales');document.getElementById('mb-p').classList.toggle('active',m==='pnd');atab='pup';renderDash();}
 function renderDash(){renderTabs();renderPanel();}
 function renderTabs(){
   const cos=mode==='pnd'?PND_COS:S_COS;
-  document.getElementById('tabs').innerHTML=cos.map(co=>{
-    const cnt=co.id==='done'?done.length:mode==='pnd'?pnd[co.id].filter(o=>!o.done).length:(sales[co.id]||[]).length;
-    return '<div class="tab'+(atab===co.id?' active':'')+'" onclick="swTab(\''+co.id+'\')">'+co.name+'<span class="tbadge '+co.bc+'">'+cnt+'</span></div>';
-  }).join('');
+  document.getElementById('tabs').innerHTML=cos.map(co=>{let cnt;if(co.id==='done')cnt=done.length;else if(mode==='pnd')cnt=pndOrders[co.id]?pndOrders[co.id].filter(o=>!o.done).length:0;else cnt=salesOrders[co.id]?salesOrders[co.id].length:0;return'<div class="tab'+(atab===co.id?' active':'')+'" onclick="swTab(''+co.id+'')">'+co.name+'<span class="tbadge '+co.bc+'">'+cnt+'</span></div>';}).join('');
   document.getElementById('fab-row').innerHTML=mode==='sales'?'<div class="fab-row"><button class="fab" onclick="openNew()">+</button></div>':'';
 }
 function swTab(id){atab=id;renderTabs();renderPanel();}
 function renderPanel(){mode==='pnd'?(atab==='done'?renderDone():renderPnd()):renderSales();}
-function renderPnd(){
-  const list=pnd[atab].filter(o=>!o.done);
-  document.getElementById('panel').innerHTML=list.length?'<div class="ow">'+list.map(o=>pndCard(o,atab)).join('')+'</div>':'<div class="empty">All orders completed</div>';
-}
-function renderDone(){
-  if(!done.length){document.getElementById('panel').innerHTML='<div class="empty">No completed orders yet</div>';return;}
-  document.getElementById('panel').innerHTML='<div class="chdr"><span class="ctit">'+done.length+' shipped</span><button class="expbtn" onclick="exportCSV()">&#8595; Export CSV</button></div><div class="ow">'+done.map(o=>pndCard(o,'done')).join('')+'</div>';
-}
-function pndCard(o,co){
-  const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');
-  const conf=o.products.filter(p=>p.packed===p.demand).length;const isDone=co==='done';
-  const safeRef=o.ref.replace(/\//g,'__');
-  return '<div class="card'+(isDone?' done':'')+'"><div class="r1"><div><div class="oref">'+o.ref+'</div><div class="sub">'+o.so+'</div></div><div class="fgs">'+flags+'</div></div>'+
-    '<div class="cust">'+o.customer+'</div><div class="addr">'+o.address+'</div><div class="cl"><span class="cdot"></span>'+o.carrier+'</div>'+
-    '<div class="pills">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div>'+
-    '<div class="cf">'+(isDone?'<span></span><span class="sbadge">Shipped</span>':'<span class="pnote">'+(conf>0?conf+'/'+o.products.length+' packed':'')+'</span><button class="vb" onclick="openPnd(\''+co+'\',\''+safeRef+'\')">View &rarr;</button>')+'</div></div>';
-}
-function renderSales(){
-  const list=sales[atab]||[];
-  document.getElementById('panel').innerHTML=list.length?'<div class="ow">'+list.map(o=>salesCard(o,atab)).join('')+'</div>':'<div class="empty">No orders yet.<br>Tap + to create one.</div>';
-}
-function salesCard(o,co){
-  const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');
-  const ps=o.products.map(p=>p.name+' x'+p.qty).join(', ');
-  const partial=o.amountPaid>0&&o.amountPaid<o.total;const hasDisc=o.discount>0;
-  return '<div class="card s'+o.status[0]+'"><div class="r1"><div><div class="oref">'+o.ref+'</div><div class="sub">'+o.date+'</div></div>'+spill(o.status)+'</div>'+
-    '<div class="cust">'+o.customer+'</div><div class="addr">'+o.address+'</div>'+
-    '<div class="cl"><span class="cdot"></span>'+o.carrier+' &middot; '+o.payMethod+(partial?' &middot; <span style="color:#b45309;">Partial</span>':'')+'</div>'+
-    '<div style="font-size:12px;color:#888;margin-bottom:8px;line-height:1.5;">'+ps+'</div>'+
-    '<div class="fgs" style="margin-bottom:8px;">'+flags+'</div>'+
-    '<div class="cf"><span class="pnote">'+fmt(o.total)+(hasDisc?' <span style="color:#ef4444;font-size:11px;">-'+fmt(o.discount)+' disc</span>':'')+(partial?' &middot; '+fmt(o.amountPaid)+' paid':'')+'</span><button class="vb" onclick="openSales(\''+co+'\',\''+o.ref+'\')">View &rarr;</button></div></div>';
-}
-function openPnd(co,ref){
-  ref=ref.replace(/__/g,'/');curCo=co;curO=pnd[co].find(o=>o.ref===ref);
-  document.getElementById('d-ref').textContent=curO.ref;document.getElementById('d-so').textContent=curO.so+' · '+co.toUpperCase();
-  renderPndDet();showScreen('det');
-}
+function renderPnd(){const list=(pndOrders[atab]||[]).filter(o=>!o.done);document.getElementById('panel').innerHTML=list.length?'<div class="ow">'+list.map(o=>pndCard(o,atab)).join('')+'</div>':'<div class="empty">No ready deliveries</div>';}
+function renderDone(){if(!done.length){document.getElementById('panel').innerHTML='<div class="empty">No completed orders yet</div>';return;}document.getElementById('panel').innerHTML='<div class="chdr"><span class="ctit">'+done.length+' shipped</span><button class="expbtn" onclick="exportCSV()">&#8595; Export CSV</button></div><div class="ow">'+done.map(o=>pndCard(o,'done')).join('')+'</div>';}
+function pndCard(o,co){const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');const conf=o.products.filter(p=>p.packed===p.demand).length;const isDone=co==='done';const safeRef=o.ref.replace(/\/g,'__');return'<div class="card'+(isDone?' done':'')+'">'+'<div class="r1"><div><div class="oref">'+o.ref+'</div><div class="sub">'+o.so+'</div></div><div class="fgs">'+flags+'</div></div>'+'<div class="cust">'+o.customer+'</div><div class="addr">'+o.address+'</div><div class="cl"><span class="cdot"></span>'+o.carrier+'</div>'+'<div class="pills">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div>'+'<div class="cf">'+(isDone?'<span></span><span class="sbadge">Shipped</span>':'<span class="pnote">'+(conf>0?conf+'/'+o.products.length+' packed':'')+'</span><button class="vb" onclick="openPnd(''+co+'',''+safeRef+'')">View &rarr;</button>')+'</div></div>';}
+function renderSales(){const list=salesOrders[atab]||[];document.getElementById('panel').innerHTML=list.length?'<div class="ow">'+list.map(o=>salesCard(o,atab)).join('')+'</div>':'<div class="empty">No orders yet.<br>Tap + to create one.</div>';}
+function salesCard(o,co){const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');const ps=o.products.map(p=>p.name+' x'+p.qty).join(', ');const partial=o.amountPaid>0&&o.amountPaid<o.total;const hasDisc=o.discount>0;return'<div class="card s'+o.status[0]+'">'+'<div class="r1"><div><div class="oref">'+o.ref+'</div><div class="sub">'+o.date+'</div></div>'+spill(o.status)+'</div>'+'<div class="cust">'+o.customer+'</div><div class="addr">'+o.address+'</div>'+'<div class="cl"><span class="cdot"></span>'+o.carrier+' &middot; '+o.payMethod+(partial?' &middot; <span style="color:#b45309;">Partial</span>':'')+'</div>'+'<div style="font-size:12px;color:#888;margin-bottom:8px;line-height:1.5;">'+ps+'</div>'+'<div class="fgs" style="margin-bottom:8px;">'+flags+'</div>'+'<div class="cf"><span class="pnote">'+fmt(o.total)+(hasDisc?' <span style="color:#ef4444;font-size:11px;">-'+fmt(o.discount)+' disc</span>':'')+(partial?' &middot; '+fmt(o.amountPaid)+' paid':'')+'</span><button class="vb" onclick="openSales(''+co+'',''+o.ref+'')">View &rarr;</button></div></div>';}
+function openPnd(co,ref){ref=ref.replace(/__/g,'/');curCo=co;curO=(pndOrders[co]||[]).find(o=>o.ref===ref);if(!curO)return;document.getElementById('d-ref').textContent=curO.ref;document.getElementById('d-so').textContent=curO.so+' · '+co.toUpperCase();renderPndDet();showScreen('det');}
 function goBack(){showScreen('ds');renderDash();}
-function renderPndDet(){
-  const o=curO;const conf=o.products.filter(p=>p.packed===p.demand).length;const tot=o.products.length;const ap=conf===tot;const pct=Math.round((conf/tot)*100);
-  const flags=[o.on?'<span class="fon">ON &mdash; Overnight</span>':'',o.twoday?'<span class="f2d">2DAY &mdash; 2-Day</span>':''].filter(Boolean).join('');
-  document.getElementById('det-c').innerHTML=
-    (o.done?'<div class="sban"><div class="sban-i">&#10003;</div><div class="sban-t">Order Shipped</div><div class="sban-s">'+o.ref+' moved to Completed.</div></div><button class="bdash" onclick="goBack()">&#8592; Back to P&amp;D</button>':'')+
-    '<div class="ic"><div class="ir"><span class="il">Customer</span><span class="iv">'+o.customer+'</span></div>'+
-    '<div class="ir"><span class="il">Address</span><span class="iv">'+o.address+'</span></div>'+
-    '<div class="ir"><span class="il">Carrier</span><span class="iv"><span class="cbadge"><span style="width:7px;height:7px;border-radius:50%;background:#3b82f6;display:inline-block;"></span>'+o.carrier+'</span></span></div>'+
-    (flags?'<div class="fr">'+flags+'</div>':'')+
-    '<div class="pr2">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div></div>'+
-    '<div class="sl">Items to pack</div><div class="pbw"><div class="pbf" id="pf" style="width:'+pct+'%"></div></div>'+
-    '<div class="plw">'+o.products.map((p,i)=>pRow(p,i,o.done)).join('')+'</div>'+
-    (!o.done?'<div class="spc"></div><div class="vs"><button class="vbtn2'+(ap?' ap':'')+'" id="vb" onclick="valOrder()">Validate &amp; Ship</button><div class="vhint" id="vh">'+(ap?'All confirmed &mdash; ready to go':'Use + to count each item, then validate')+'</div></div>':'<div style="height:32px;"></div>');
-}
-function pRow(p,i,locked){
-  const ip=p.packed===p.demand;
-  if(locked)return '<div class="pr pk"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Packed: '+p.packed+' of '+p.demand+'</div></div><div class="qd"><span class="qv full">'+p.packed+'</span><span class="qof">of '+p.demand+'</span></div></div>';
-  return '<div class="pr'+(ip?' pk':'')+'" id="pr'+i+'"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Need: '+p.demand+'</div></div>'+
-    '<div class="qc"><button class="qb" onclick="chQ('+i+',-1)" id="mn'+i+'" '+(p.packed===0?'disabled':'')+'>&#8722;</button>'+
-    '<div class="qd"><span class="qv'+(ip?' full':'')+'" id="qv'+i+'">'+p.packed+'</span><span class="qof">of '+p.demand+'</span></div>'+
-    '<button class="qb" onclick="chQ('+i+',1)" id="pl'+i+'" '+(ip?'disabled':'')+'>+</button></div></div>';
-}
-function chQ(i,d){
-  const p=curO.products[i];p.packed=Math.max(0,Math.min(p.demand,p.packed+d));const ip=p.packed===p.demand;
-  document.getElementById('qv'+i).textContent=p.packed;document.getElementById('qv'+i).className='qv'+(ip?' full':'');
-  const row=document.getElementById('pr'+i);if(ip)row.classList.add('pk');else row.classList.remove('pk');
-  document.getElementById('mn'+i).disabled=p.packed===0;document.getElementById('pl'+i).disabled=ip;updP();
-}
-function updP(){
-  const conf=curO.products.filter(p=>p.packed===p.demand).length;const tot=curO.products.length;const ap=conf===tot;
-  document.getElementById('pf').style.width=Math.round((conf/tot)*100)+'%';
-  const btn=document.getElementById('vb');if(ap)btn.classList.add('ap');else btn.classList.remove('ap');
-  document.getElementById('vh').innerHTML=ap?'All confirmed &mdash; ready to go':'Use + to count each item, then validate';
-}
-function valOrder(){curO.done=true;done.unshift(curO);renderPndDet();renderTabs();}
-function openSales(co,ref){
-  curCo=co;curSO=sales[co].find(o=>o.ref===ref);
-  document.getElementById('sd-ref').textContent=curSO.ref;document.getElementById('sd-sub').textContent=curSO.customer+' · '+co.toUpperCase();
-  renderSalesDet();showScreen('sdet');
-}
+function renderPndDet(){const o=curO;const conf=o.products.filter(p=>p.packed===p.demand).length;const tot=o.products.length;const ap=conf===tot;const pct=Math.round((conf/tot)*100);const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');document.getElementById('det-c').innerHTML=(o.done?'<div class="sban"><div class="sban-i">&#10003;</div><div class="sban-t">Order Shipped</div><div class="sban-s">'+o.ref+' moved to Completed.</div></div><button class="bdash" onclick="goBack()">&#8592; Back to P&amp;D</button>':'')+'<div class="ic"><div class="ir"><span class="il">Customer</span><span class="iv">'+o.customer+'</span></div><div class="ir"><span class="il">Address</span><span class="iv">'+o.address+'</span></div><div class="ir"><span class="il">Carrier</span><span class="iv"><span class="cbadge"><span style="width:7px;height:7px;border-radius:50%;background:#3b82f6;display:inline-block;"></span>'+o.carrier+'</span></span></div>'+(flags?'<div class="fr">'+flags+'</div>':'')+'<div class="pr2">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div></div><div class="sl">Items to pack</div><div class="pbw"><div class="pbf" id="pf" style="width:'+pct+'%"></div></div><div class="plw">'+o.products.map((p,i)=>pRow(p,i,o.done)).join('')+'</div>'+(!o.done?'<div class="spc"></div><div class="vs"><button class="vbtn2'+(ap?' ap':'')+'" id="vb" onclick="valOrder()">Validate &amp; Ship</button><div class="vhint" id="vh">'+(ap?'All confirmed':'Use + to count each item, then validate')+'</div></div>':'<div style="height:32px;"></div>');}
+function pRow(p,i,locked){const ip=p.packed===p.demand;if(locked)return'<div class="pr pk"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Packed: '+p.packed+' of '+p.demand+'</div></div><div class="qd"><span class="qv full">'+p.packed+'</span><span class="qof">of '+p.demand+'</span></div></div>';return'<div class="pr'+(ip?' pk':'')+'" id="pr'+i+'"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Need: '+p.demand+'</div></div><div class="qc"><button class="qb" onclick="chQ('+i+',-1)" id="mn'+i+'" '+(p.packed===0?'disabled':'')+'>&#8722;</button><div class="qd"><span class="qv'+(ip?' full':'')+'" id="qv'+i+'">'+p.packed+'</span><span class="qof">of '+p.demand+'</span></div><button class="qb" onclick="chQ('+i+',1)" id="pl'+i+'" '+(ip?'disabled':'')+'>+</button></div></div>';}
+function chQ(i,d){const p=curO.products[i];p.packed=Math.max(0,Math.min(p.demand,p.packed+d));const ip=p.packed===p.demand;document.getElementById('qv'+i).textContent=p.packed;document.getElementById('qv'+i).className='qv'+(ip?' full':'');const row=document.getElementById('pr'+i);if(ip)row.classList.add('pk');else row.classList.remove('pk');document.getElementById('mn'+i).disabled=p.packed===0;document.getElementById('pl'+i).disabled=ip;updP();}
+function updP(){const conf=curO.products.filter(p=>p.packed===p.demand).length;const tot=curO.products.length;const ap=conf===tot;document.getElementById('pf').style.width=Math.round((conf/tot)*100)+'%';const btn=document.getElementById('vb');if(ap)btn.classList.add('ap');else btn.classList.remove('ap');document.getElementById('vh').textContent=ap?'All confirmed':'Use + to count each item, then validate';}
+async function valOrder(){showLoading('Validating shipment...');try{await odooAuth();await odooCall('stock.picking','button_validate',[[curO.odooId]],{});curO.done=true;done.unshift(curO);renderPndDet();renderTabs();}catch(e){try{await odooCall('stock.picking','action_immediate_transfer',[[curO.odooId]],{});await odooCall('stock.picking','button_validate',[[curO.odooId]],{});curO.done=true;done.unshift(curO);renderPndDet();renderTabs();}catch(e2){showErr('Validation failed: '+e2.message);}}hideLoading();}
+function openSales(co,ref){curCo=co;curSO=(salesOrders[co]||[]).find(o=>o.ref===ref);if(!curSO)return;document.getElementById('sd-ref').textContent=curSO.ref;document.getElementById('sd-sub').textContent=curSO.customer+' · '+co.toUpperCase();renderSalesDet();showScreen('sdet');}
 function goBackS(){showScreen('ds');renderDash();}
-function renderSalesDet(){
-  const o=curSO;
-  const flags=[o.on?'<span class="fon">ON &mdash; Overnight</span>':'',o.twoday?'<span class="f2d">2DAY &mdash; 2-Day</span>':''].filter(Boolean).join('');
-  const prows=o.products.map(p=>'<div class="pr"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Qty: '+p.qty+' &middot; '+fmt(p.price*p.qty)+'</div></div></div>').join('');
-  const subtotal=parseFloat(o.subtotal||0);const disc=parseFloat(o.discount||0);const total=parseFloat(o.total||0);
-  const amtPaid=parseFloat(o.amountPaid||0);const isPartial=amtPaid>0&&amtPaid<total;
-  const isPaid=o.status==='paid';const canConf=o.status==='draft';const canPay=o.status==='confirmed';const hasDisc=disc>0;
-  document.getElementById('sdet-c').innerHTML=
-    (isPaid?'<div class="sban"><div class="sban-i">&#128176;</div><div class="sban-t">'+(isPartial?'Partial Payment Received':'Payment Received')+'</div><div class="sban-s">'+fmt(amtPaid)+' of '+fmt(total)+' via '+o.payMethod+'</div></div>':'')+
-    '<div class="ic"><div class="ir"><span class="il">Status</span><span class="iv">'+spill(o.status)+'</span></div>'+
-    '<div class="ir"><span class="il">Customer</span><span class="iv">'+o.customer+'</span></div>'+
-    '<div class="ir"><span class="il">Address</span><span class="iv">'+o.address+'</span></div>'+
-    '<div class="ir"><span class="il">Carrier</span><span class="iv"><span class="cbadge"><span style="width:7px;height:7px;border-radius:50%;background:#3b82f6;display:inline-block;"></span>'+o.carrier+'</span></span></div>'+
-    '<div class="ir"><span class="il">Payment</span><span class="iv">'+o.payMethod+'</span></div>'+
-    '<div class="ir"><span class="il">Total</span><span class="iv">'+fmt(total)+(hasDisc?' <span style="font-size:11px;background:#fee2e2;color:#991b1b;padding:2px 9px;border-radius:99px;">-'+fmt(disc)+' off</span>':'')+'</span></div>'+
-    (isPaid?'<div class="ir"><span class="il">Received</span><span class="iv">'+fmt(amtPaid)+(isPartial?' <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 9px;border-radius:99px;">Partial</span>':' <span style="background:#dcfce7;color:#166534;font-size:11px;padding:2px 9px;border-radius:99px;">Paid in Full</span>')+'</span></div>':'')+
-    (flags?'<div class="fr">'+flags+'</div>':'')+
-    '<div class="pr2">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div></div>'+
-    '<div class="sl">Products</div>'+
-    '<div class="plw" style="margin:0 16px 16px;">'+prows+
-    (hasDisc?'<div class="pr" style="background:#f9f9f9;"><div class="pi"><div class="pn">Subtotal</div></div><div style="font-size:13px;color:#888;">'+fmt(subtotal)+'</div></div>'+
-    '<div class="pr" style="background:#fff5f5;"><div class="pi"><div class="pn" style="color:#ef4444;">Discount</div></div><div style="font-size:13px;color:#ef4444;">-'+fmt(disc)+'</div></div>':'')+
-    '<div class="pr" style="background:#f9f9f9;"><div class="pi"><div class="pn" style="font-weight:600;">Total</div></div><div style="font-size:15px;font-weight:600;color:#111;">'+fmt(total)+'</div></div></div>'+
-    (!isPaid?'<div class="abar">'+
-      (canConf?'<button class="abtn bc" onclick="confOrder()">Confirm Order</button>':'<button class="abtn boff">Confirm Order</button>')+
-      (canPay?'<div class="ablbl">Payment Method</div>'+
-        '<div class="pmg" id="pm-g">'+['Cash','CCC','CashApp','Zelle'].map(m=>'<button class="pm" id="pm-'+m+'" onclick="selPM(\''+m+'\')" style="'+(o.payMethod===m?'background:#111;color:#fff;border-color:#111;':'')+'">'+m+'</button>').join('')+'</div>'+
-        '<div class="partwrap"><div class="partlbl">Amount Received</div>'+
-        '<div class="partrow"><span class="partsym">$</span><input class="partinput" type="number" id="amt" step="0.01" min="0" placeholder="'+total.toFixed(2)+'" value="'+total.toFixed(2)+'"></div>'+
-        '<div class="parttot">Order total: '+fmt(total)+'</div></div>'+
-        '<button class="abtn bp2" onclick="markPaid()">Mark as Paid</button>':'<button class="abtn boff">Mark as Paid</button>')+
-    '</div>':'<div style="height:16px;"></div>');
-}
-function confOrder(){curSO.status='confirmed';renderSalesDet();renderTabs();}
-function selPM(m){
-  curSO.payMethod=m;
-  ['Cash','CCC','CashApp','Zelle'].forEach(x=>{
-    const b=document.getElementById('pm-'+x);if(!b)return;
-    if(x===m){b.style.background='#111';b.style.color='#fff';b.style.borderColor='#111';}
-    else{b.style.background='';b.style.color='';b.style.borderColor='';}
-  });
-}
-function markPaid(){
-  const inp=document.getElementById('amt');
-  curSO.amountPaid=Math.min(parseFloat(inp?inp.value:0)||curSO.total,curSO.total);
-  curSO.status='paid';renderSalesDet();renderTabs();
-}
-function openNew(){
-  fProds=[];selOn=false;sel2d=false;selPay='Zelle';runTotal=0;discount=0;selProdPrice=null;
-  document.getElementById('no-co').textContent=atab.toUpperCase();
-  renderForm();showScreen('nord');
-}
+function renderSalesDet(){const o=curSO;const flags=[o.on?'<span class="fon">ON</span>':'',o.twoday?'<span class="f2d">2DAY</span>':''].filter(Boolean).join('');const prows=o.products.map(p=>'<div class="pr"><div class="pi"><div class="pn">'+p.name+'</div><div class="pnd2">Qty: '+p.qty+' &middot; '+fmt(p.price*p.qty)+'</div></div></div>').join('');const subtotal=parseFloat(o.subtotal||0);const disc=parseFloat(o.discount||0);const total=parseFloat(o.total||0);const amtPaid=parseFloat(o.amountPaid||0);const isPartial=amtPaid>0&&amtPaid<total;const isPaid=o.status==='paid';const canConf=o.status==='draft';const canPay=o.status==='confirmed';const hasDisc=disc>0;document.getElementById('sdet-c').innerHTML=(isPaid?'<div class="sban"><div class="sban-i">&#128176;</div><div class="sban-t">'+(isPartial?'Partial Payment Received':'Payment Received')+'</div><div class="sban-s">'+fmt(amtPaid)+' of '+fmt(total)+' via '+o.payMethod+'</div></div>':'')+'<div class="ic"><div class="ir"><span class="il">Status</span><span class="iv">'+spill(o.status)+'</span></div><div class="ir"><span class="il">Customer</span><span class="iv">'+o.customer+'</span></div><div class="ir"><span class="il">Address</span><span class="iv">'+o.address+'</span></div><div class="ir"><span class="il">Carrier</span><span class="iv"><span class="cbadge"><span style="width:7px;height:7px;border-radius:50%;background:#3b82f6;display:inline-block;"></span>'+o.carrier+'</span></span></div><div class="ir"><span class="il">Payment</span><span class="iv">'+o.payMethod+'</span></div><div class="ir"><span class="il">Total</span><span class="iv">'+fmt(total)+(hasDisc?' <span style="font-size:11px;background:#fee2e2;color:#991b1b;padding:2px 9px;border-radius:99px;">-'+fmt(disc)+' off</span>':'')+'</span></div>'+(isPaid?'<div class="ir"><span class="il">Received</span><span class="iv">'+fmt(amtPaid)+(isPartial?' <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 9px;border-radius:99px;">Partial</span>':' <span style="background:#dcfce7;color:#166534;font-size:11px;padding:2px 9px;border-radius:99px;">Paid in Full</span>')+'</span></div>':'')+(flags?'<div class="fr">'+flags+'</div>':'')+'<div class="pr2">'+pill('PK',o.pk)+pill('C',o.c)+pill('Z',o.z)+pill('D',o.d)+'</div></div><div class="sl">Products</div><div class="plw" style="margin:0 16px 16px;">'+prows+(hasDisc?'<div class="pr" style="background:#f9f9f9;"><div class="pi"><div class="pn">Subtotal</div></div><div style="font-size:13px;color:#888;">'+fmt(subtotal)+'</div></div><div class="pr" style="background:#fff5f5;"><div class="pi"><div class="pn" style="color:#ef4444;">Discount</div></div><div style="font-size:13px;color:#ef4444;">-'+fmt(disc)+'</div></div>':'')+'<div class="pr" style="background:#f9f9f9;"><div class="pi"><div class="pn" style="font-weight:600;">Total</div></div><div style="font-size:15px;font-weight:600;color:#111;">'+fmt(total)+'</div></div></div>'+(!isPaid?'<div class="abar">'+(canConf?'<button class="abtn bc" onclick="confirmSO()">Confirm Order</button>':'<button class="abtn boff">Confirm Order</button>')+(canPay?'<div class="ablbl">Payment Method</div><div class="pmg" id="pm-g">'+PAY_METHODS.map(m=>'<button class="pm" id="pm-'+m+'" onclick="selPM(''+m+'')" style="'+(o.payMethod===m?'background:#111;color:#fff;border-color:#111;':'')+'"">'+m+'</button>').join('')+'</div><div class="partwrap"><div class="partlbl">Amount Received</div><div class="partrow"><span class="partsym">$</span><input class="partinput" type="number" id="amt" step="0.01" min="0" placeholder="'+total.toFixed(2)+'" value="'+total.toFixed(2)+'"></div><div class="parttot">Order total: '+fmt(total)+'</div></div><button class="abtn bp2" onclick="markPaid()">Mark as Paid</button>':'<button class="abtn boff">Mark as Paid</button>')+'</div>':'<div style="height:16px;"></div>');}
+async function confirmSO(){showLoading('Confirming order...');try{await odooAuth();await odooCall('sale.order','action_confirm',[[curSO.odooId]],{});curSO.status='confirmed';renderSalesDet();renderTabs();}catch(e){showErr('Failed to confirm: '+e.message);}hideLoading();}
+function selPM(m){curSO.payMethod=m;PAY_METHODS.forEach(x=>{const b=document.getElementById('pm-'+x);if(!b)return;if(x===m){b.style.background='#111';b.style.color='#fff';b.style.borderColor='#111';}else{b.style.background='';b.style.color='';b.style.borderColor='';}});}
+async function markPaid(){const inp=document.getElementById('amt');const amount=Math.min(parseFloat(inp?inp.value:0)||curSO.total,curSO.total);showLoading('Registering payment...');try{await odooAuth();const invIds=await odooCall('sale.order','_create_invoices',[[curSO.odooId]],{});const invId=Array.isArray(invIds)?invIds[0]:invIds;await odooCall('account.move','action_post',[[invId]],{});const journalId=JOURNAL_MAP[curSO.payMethod]||1;await odooCall('account.payment.register','create',[{amount,journal_id:journalId,payment_date:new Date().toISOString().slice(0,10),communication:curSO.ref}],{});curSO.amountPaid=amount;curSO.status='paid';renderSalesDet();renderTabs();}catch(e){showErr('Payment failed: '+e.message);}hideLoading();}
+function openNew(){fProds=[];selOn=false;sel2d=false;selPay='Zelle';runTotal=0;discount=0;selProdPrice=null;selProdOdooId=null;document.getElementById('no-co').textContent=atab.toUpperCase();renderForm();showScreen('nord');}
 function closeNew(){showScreen('ds');renderDash();}
-function renderForm(){
-  document.getElementById('nform').innerHTML=
-    '<div class="fsec">Customer</div>'+
-    '<div class="ff srw"><input type="text" id="cs" placeholder="Search or enter customer name" oninput="srchC(this.value)" autocomplete="off" onblur="hideCustSug()"><div class="srl" id="cr" style="display:none;"></div></div>'+
-    '<div class="ff"><label>Shipping Address</label><textarea id="sa" placeholder="Full shipping address"></textarea></div>'+
-    '<div class="fsec">Shipping</div>'+
-    '<div class="ff"><label>Carrier</label><select id="car"><option>UPS</option><option>FedEx</option><option>USPS</option><option>DHL</option></select></div>'+
-    '<div class="ftrow"><button id="bt-on" class="ft" onclick="togF(\'on\')">ON &mdash; Overnight</button><button id="bt-2d" class="ft" onclick="togF(\'2d\')">2DAY &mdash; 2-Day</button></div>'+
-    '<div class="fsec">Packing Info</div>'+
-    '<div class="packg">'+['PK','C','Z','D'].map(f=>'<div class="pgf"><label>'+f+'</label><input type="number" id="pf-'+f+'" min="0" value="0"></div>').join('')+'</div>'+
-    '<div class="fsec">Products</div>'+
-    '<div id="plines" class="plines"><div style="font-size:13px;color:#888;padding:2px 0;">No products added yet</div></div>'+
-    '<table style="width:100%;border-collapse:separate;border-spacing:0;margin-bottom:10px;">'+
-      '<tr>'+
-        '<td style="padding-right:6px;position:relative;">'+
-          '<input type="text" id="pname-in" placeholder="Search or type product..." autocomplete="off" oninput="srchProd(this.value)" onblur="hideProdSug()"'+
-            ' style="width:100%;padding:12px 12px;font-size:14px;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;">'+
-          '<div id="psugg" class="srl" style="display:none;"></div>'+
-        '</td>'+
-        '<td style="width:90px;padding-right:6px;">'+
-          '<input type="number" id="pprice" min="0" step="0.01" placeholder="$price"'+
-            ' style="width:100%;padding:12px 8px;font-size:14px;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;text-align:center;">'+
-        '</td>'+
-        '<td style="width:50px;padding-right:6px;">'+
-          '<input type="number" id="pqty" min="1" value="1"'+
-            ' style="width:100%;padding:12px 4px;font-size:14px;font-weight:600;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;text-align:center;">'+
-        '</td>'+
-        '<td style="width:60px;">'+
-          '<button onclick="addProd()" style="width:100%;padding:12px 0;font-size:14px;font-weight:600;border:1px solid #111;border-radius:10px;background:#111;color:#fff;cursor:pointer;font-family:inherit;">Add</button>'+
-        '</td>'+
-      '</tr>'+
-    '</table>'+
-    '<div class="fsec">Payment</div>'+
-    '<div class="fpmg" id="fpm-g">'+['Cash','CCC','CashApp','Zelle'].map(m=>'<button class="fpm" id="fpm-'+m+'" onclick="selFP(\''+m+'\')" style="'+(selPay===m?'background:#111;color:#fff;border-color:#111;':'')+'">'+m+'</button>').join('')+'</div>'+
-    '<div class="fsec">Discount</div>'+
-    '<div class="disc-wrap">'+
-      '<div class="disc-lbl">Fixed amount off order total</div>'+
-      '<div class="disc-row"><span class="disc-sym">$</span><input class="disc-input" type="number" id="disc-in" min="0" step="0.01" placeholder="0.00" oninput="updTotal()"></div>'+
-      '<div class="disc-note" id="disc-note">No discount applied</div>'+
-    '</div>'+
-    '<div class="total-box">'+
-      '<div class="total-row"><span class="total-lbl">Subtotal</span><span class="total-amt" id="run-sub">$0.00</span></div>'+
-      '<div class="total-row" id="disc-row-display" style="display:none;"><span class="total-lbl" style="color:#ef4444;">Discount</span><span class="total-disc" id="run-disc">-$0.00</span></div>'+
-      '<hr class="total-divider">'+
-      '<div class="total-row"><span class="total-lbl" style="font-weight:600;color:#111;">Total</span><span class="total-final" id="run-total">$0.00</span></div>'+
-    '</div>'+
-    '<button class="subbtn" onclick="submitOrder()">Create Order</button>';
-}
-function srchProd(v){
-  selProdPrice=null;
-  const sugg=document.getElementById('psugg');if(!v){sugg.style.display='none';return;}
-  const matches=PRODS.filter(p=>p.name.toLowerCase().includes(v.toLowerCase())).slice(0,6);
-  if(matches.length){
-    sugg.innerHTML=matches.map(p=>'<div class="sri" onmousedown="pickProd(\''+p.name.replace(/'/g,'&#39;')+'\','+p.price+')">'+p.name+' <span style="color:#888;font-size:12px;">('+fmt(p.price)+')</span></div>').join('');
-    sugg.style.display='block';
-  } else sugg.style.display='none';
-}
-function pickProd(name,price){
-  document.getElementById('pname-in').value=name;document.getElementById('psugg').style.display='none';
-  document.getElementById('pprice').value=price.toFixed(2);selProdPrice=price;
-}
+function renderForm(){document.getElementById('nform').innerHTML='<div class="fsec">Customer</div><div class="ff srw"><input type="text" id="cs" placeholder="Search or enter customer name" oninput="srchC(this.value)" autocomplete="off" onblur="hideCustSug()"><div class="srl" id="cr" style="display:none;"></div></div><div class="ff"><label>Shipping Address</label><textarea id="sa" placeholder="Full shipping address"></textarea></div><div class="fsec">Shipping</div><div class="ff"><label>Carrier</label><select id="car"><option>UPS</option><option>FedEx</option><option>USPS</option><option>DHL</option></select></div><div class="ftrow"><button id="bt-on" class="ft" onclick="togF('on')">ON &mdash; Overnight</button><button id="bt-2d" class="ft" onclick="togF('2d')">2DAY &mdash; 2-Day</button></div><div class="fsec">Packing Info</div><div class="packg">'+['PK','C','Z','D'].map(f=>'<div class="pgf"><label>'+f+'</label><input type="number" id="pf-'+f+'" min="0" value="0"></div>').join('')+'</div><div class="fsec">Products</div><div id="plines" class="plines"><div style="font-size:13px;color:#888;padding:2px 0;">No products added yet</div></div><table style="width:100%;border-collapse:separate;border-spacing:0;margin-bottom:10px;"><tr><td style="padding-right:6px;position:relative;"><input type="text" id="pname-in" placeholder="Search or type product..." autocomplete="off" oninput="srchProd(this.value)" onblur="hideProdSug()" style="width:100%;padding:12px 12px;font-size:14px;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;"><div id="psugg" class="srl" style="display:none;"></div></td><td style="width:90px;padding-right:6px;"><input type="number" id="pprice" min="0" step="0.01" placeholder="$price" style="width:100%;padding:12px 8px;font-size:14px;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;text-align:center;"></td><td style="width:50px;padding-right:6px;"><input type="number" id="pqty" min="1" value="1" style="width:100%;padding:12px 4px;font-size:14px;font-weight:600;border:1px solid #ddd;border-radius:10px;background:#fff;color:#111;font-family:inherit;text-align:center;"></td><td style="width:60px;"><button onclick="addProd()" style="width:100%;padding:12px 0;font-size:14px;font-weight:600;border:1px solid #111;border-radius:10px;background:#111;color:#fff;cursor:pointer;font-family:inherit;">Add</button></td></tr></table><div class="fsec">Payment</div><div class="fpmg" id="fpm-g">'+PAY_METHODS.map(m=>'<button class="fpm" id="fpm-'+m+'" onclick="selFP(''+m+'')" style="'+(selPay===m?'background:#111;color:#fff;border-color:#111;':'')+'"">'+m+'</button>').join('')+'</div><div class="fsec">Discount</div><div class="disc-wrap"><div class="disc-lbl">Fixed amount off order total</div><div class="disc-row"><span class="disc-sym">$</span><input class="disc-input" type="number" id="disc-in" min="0" step="0.01" placeholder="0.00" oninput="updTotal()"></div><div class="disc-note" id="disc-note">No discount applied</div></div><div class="total-box"><div class="total-row"><span class="total-lbl">Subtotal</span><span class="total-amt" id="run-sub">$0.00</span></div><div class="total-row" id="disc-row-display" style="display:none;"><span class="total-lbl" style="color:#ef4444;">Discount</span><span class="total-disc" id="run-disc">-$0.00</span></div><hr class="total-divider"><div class="total-row"><span class="total-lbl" style="font-weight:600;color:#111;">Total</span><span class="total-final" id="run-total">$0.00</span></div></div><button class="subbtn" onclick="submitOrder()">Create Order</button>';}
+function srchProd(v){selProdPrice=null;const sugg=document.getElementById('psugg');if(!v){sugg.style.display='none';return;}const matches=odooProducts.filter(p=>p.name.toLowerCase().includes(v.toLowerCase())).slice(0,6);if(matches.length){sugg.innerHTML=matches.map(p=>'<div class="sri" onmousedown="pickProd(''+p.name.replace(/'/g,'&#39;')+'','+p.lst_price+','+p.id+')">'+p.name+' <span style="color:#888;font-size:12px;">('+fmt(p.lst_price)+')</span></div>').join('');sugg.style.display='block';}else sugg.style.display='none';}
+function pickProd(name,price,oid){document.getElementById('pname-in').value=name;document.getElementById('psugg').style.display='none';document.getElementById('pprice').value=price.toFixed(2);selProdPrice=price;selProdOdooId=oid;}
 function hideProdSug(){setTimeout(()=>{const s=document.getElementById('psugg');if(s)s.style.display='none';},200);}
-function srchC(v){
-  const r=document.getElementById('cr');if(!v){r.style.display='none';return;}
-  const m=CUSTS.filter(c=>c.toLowerCase().includes(v.toLowerCase())).slice(0,4);
-  r.innerHTML=m.map(c=>'<div class="sri" onmousedown="selC(\''+c.replace(/'/g,'&#39;')+'\')">'+c+'</div>').join('')+'<div class="sri new" onmousedown="selC(\''+v.replace(/'/g,'&#39;')+'\')">+ Create "'+v+'"</div>';
-  r.style.display='block';
-}
-function selC(n){document.getElementById('cs').value=n;document.getElementById('cr').style.display='none';}
+function srchC(v){const r=document.getElementById('cr');if(!v){r.style.display='none';return;}const m=odooCustomers.filter(c=>c.name.toLowerCase().includes(v.toLowerCase())).slice(0,5);r.innerHTML=m.map(c=>'<div class="sri" onmousedown="selC(''+c.name.replace(/'/g,'&#39;')+'')">'+c.name+'</div>').join('')+'<div class="sri new" onmousedown="selC(''+v.replace(/'/g,'&#39;')+'')">+ Create "'+v+'"</div>';r.style.display='block';}
+function selC(n){document.getElementById('cs').value=n;document.getElementById('cr').style.display='none';const found=odooCustomers.find(c=>c.name===n);if(found){const addr=[found.street,found.city,found.state_id?found.state_id[1]:'',found.zip].filter(Boolean).join(', ');document.getElementById('sa').value=addr;}}
 function hideCustSug(){setTimeout(()=>{const r=document.getElementById('cr');if(r)r.style.display='none';},200);}
-function togF(f){
-  if(f==='on'){selOn=!selOn;if(selOn)sel2d=false;applyTog('bt-2d',false,'','','');}
-  else{sel2d=!sel2d;if(sel2d)selOn=false;applyTog('bt-on',false,'','','');}
-  if(f==='on')applyTog('bt-on',selOn,'#fee2e2','#991b1b','#fca5a5');
-  else applyTog('bt-2d',sel2d,'#fef3c7','#92400e','#fcd34d');
-}
-function applyTog(id,on,bg,color,border){
-  const b=document.getElementById(id);if(!b)return;
-  b.style.background=on?bg:'';b.style.color=on?color:'';b.style.borderColor=on?border:'';
-}
-function selFP(m){
-  selPay=m;
-  ['Cash','CCC','CashApp','Zelle'].forEach(x=>{
-    const b=document.getElementById('fpm-'+x);if(!b)return;
-    if(x===m){b.style.background='#111';b.style.color='#fff';b.style.borderColor='#111';}
-    else{b.style.background='';b.style.color='';b.style.borderColor='';}
-  });
-}
-function updTotal(){
-  const disc=Math.max(0,parseFloat((document.getElementById('disc-in')||{}).value)||0);
-  discount=disc;const finalTotal=Math.max(0,runTotal-disc);
-  const subEl=document.getElementById('run-sub');if(subEl)subEl.textContent=fmt(runTotal);
-  const totEl=document.getElementById('run-total');if(totEl)totEl.textContent=fmt(finalTotal);
-  const discRow=document.getElementById('disc-row-display');const discAmt=document.getElementById('run-disc');const discNote=document.getElementById('disc-note');
-  if(disc>0){if(discRow)discRow.style.display='flex';if(discAmt)discAmt.textContent='-'+fmt(disc);if(discNote)discNote.textContent=fmt(disc)+' off — new total: '+fmt(finalTotal);}
-  else{if(discRow)discRow.style.display='none';if(discNote)discNote.textContent='No discount applied';}
-}
-function addProd(){
-  const nameEl=document.getElementById('pname-in');const name=(nameEl.value||'').trim();if(!name){alert('Enter a product name.');return;}
-  const qty=Math.max(1,parseInt(document.getElementById('pqty').value)||1);
-  const priceEl=document.getElementById('pprice');const price=parseFloat(priceEl?priceEl.value:0)||0;
-  fProds.push({name,qty,price});runTotal+=price*qty;
-  nameEl.value='';if(priceEl)priceEl.value='';selProdPrice=null;document.getElementById('pqty').value='1';
-  refreshLines();updTotal();
-}
-function refreshLines(){
-  document.getElementById('plines').innerHTML=fProds.length?
-    fProds.map((p,i)=>'<div class="pline"><div class="pline-i"><div class="pline-n">'+p.name+'</div><div class="pline-q">Qty: '+p.qty+' &middot; '+fmt(p.price*p.qty)+'</div></div><button class="pline-r" onclick="rmP('+i+')">&#215;</button></div>').join(''):
-    '<div style="font-size:13px;color:#888;padding:2px 0;">No products added yet</div>';
-}
-function rmP(i){
-  runTotal-=fProds[i].price*fProds[i].qty;fProds.splice(i,1);refreshLines();updTotal();
-}
-function submitOrder(){
-  const cust=(document.getElementById('cs').value||'').trim();const addr=(document.getElementById('sa').value||'').trim();const car=document.getElementById('car').value;
-  if(!cust){alert('Please enter a customer name.');return;}
-  if(!addr){alert('Please enter a shipping address.');return;}
-  if(!fProds.length){alert('Please add at least one product.');return;}
-  const ref='S00'+soN++;const today=new Date().toISOString().slice(0,10);
-  const disc=Math.max(0,parseFloat((document.getElementById('disc-in')||{}).value)||0);
-  const finalTotal=Math.max(0,runTotal-disc);
-  if(!sales[atab])sales[atab]=[];
-  sales[atab].unshift({ref,customer:cust,address:addr,carrier:car,on:selOn,twoday:sel2d,
-    pk:parseInt((document.getElementById('pf-PK')||{}).value)||0,
-    c:parseInt((document.getElementById('pf-C')||{}).value)||0,
-    z:parseInt((document.getElementById('pf-Z')||{}).value)||0,
-    d:parseInt((document.getElementById('pf-D')||{}).value)||0,
-    payMethod:selPay,status:'draft',date:today,subtotal:runTotal,discount:disc,total:finalTotal,amountPaid:0,
-    products:fProds.map(p=>({name:p.name,qty:p.qty,price:p.price}))});
-  closeNew();
-}
-function exportCSV(){
-  const h=['Order Ref','SO','Company','Customer','Address','Carrier','Products','ON','2DAY'];
-  const rows=done.map(o=>[o.ref,o.so,o.ref.split('/')[0],o.customer,'"'+o.address+'"',o.carrier,'"'+o.products.map(p=>p.name+' x'+p.demand).join(' | ')+'"',o.on?'Yes':'No',o.twoday?'Yes':'No'].join(','));
-  const csv=[h.join(','),...rows].join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download='pnd_completed_'+new Date().toISOString().slice(0,10)+'.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);
-}
-renderDash();
+function togF(f){if(f==='on'){selOn=!selOn;if(selOn)sel2d=false;applyTog('bt-2d',false,'','','');}else{sel2d=!sel2d;if(sel2d)selOn=false;applyTog('bt-on',false,'','','');}if(f==='on')applyTog('bt-on',selOn,'#fee2e2','#991b1b','#fca5a5');else applyTog('bt-2d',sel2d,'#fef3c7','#92400e','#fcd34d');}
+function applyTog(id,on,bg,color,border){const b=document.getElementById(id);if(!b)return;b.style.background=on?bg:'';b.style.color=on?color:'';b.style.borderColor=on?border:'';}
+function selFP(m){selPay=m;PAY_METHODS.forEach(x=>{const b=document.getElementById('fpm-'+x);if(!b)return;if(x===m){b.style.background='#111';b.style.color='#fff';b.style.borderColor='#111';}else{b.style.background='';b.style.color='';b.style.borderColor='';}});}
+function updTotal(){const disc=Math.max(0,parseFloat((document.getElementById('disc-in')||{}).value)||0);discount=disc;const finalTotal=Math.max(0,runTotal-disc);const subEl=document.getElementById('run-sub');if(subEl)subEl.textContent=fmt(runTotal);const totEl=document.getElementById('run-total');if(totEl)totEl.textContent=fmt(finalTotal);const discRow=document.getElementById('disc-row-display');const discAmt=document.getElementById('run-disc');const discNote=document.getElementById('disc-note');if(disc>0){if(discRow)discRow.style.display='flex';if(discAmt)discAmt.textContent='-'+fmt(disc);if(discNote)discNote.textContent=fmt(disc)+' off — new total: '+fmt(finalTotal);}else{if(discRow)discRow.style.display='none';if(discNote)discNote.textContent='No discount applied';}}
+function addProd(){const nameEl=document.getElementById('pname-in');const name=(nameEl.value||'').trim();if(!name){alert('Enter a product name.');return;}const qty=Math.max(1,parseInt(document.getElementById('pqty').value)||1);const priceEl=document.getElementById('pprice');const price=parseFloat(priceEl?priceEl.value:0)||0;fProds.push({name,qty,price,odooId:selProdOdooId});runTotal+=price*qty;nameEl.value='';if(priceEl)priceEl.value='';selProdPrice=null;selProdOdooId=null;document.getElementById('pqty').value='1';refreshLines();updTotal();}
+function refreshLines(){document.getElementById('plines').innerHTML=fProds.length?fProds.map((p,i)=>'<div class="pline"><div class="pline-i"><div class="pline-n">'+p.name+'</div><div class="pline-q">Qty: '+p.qty+' &middot; '+fmt(p.price*p.qty)+'</div></div><button class="pline-r" onclick="rmP('+i+')">&#215;</button></div>').join(''):'<div style="font-size:13px;color:#888;padding:2px 0;">No products added yet</div>';}
+function rmP(i){runTotal-=fProds[i].price*fProds[i].qty;fProds.splice(i,1);refreshLines();updTotal();}
+async function submitOrder(){const cust=(document.getElementById('cs').value||'').trim();const addr=(document.getElementById('sa').value||'').trim();const car=document.getElementById('car').value;if(!cust){alert('Please enter a customer name.');return;}if(!addr){alert('Please enter a shipping address.');return;}if(!fProds.length){alert('Please add at least one product.');return;}const disc=Math.max(0,parseFloat((document.getElementById('disc-in')||{}).value)||0);const finalTotal=Math.max(0,runTotal-disc);showLoading('Creating order in Odoo...');try{await odooAuth();let partnerId=null;const found=odooCustomers.find(c=>c.name===cust);if(found)partnerId=found.id;else partnerId=await odooCall('res.partner','create',[{name:cust,street:addr,customer_rank:1}],{});const coId=companyMap[atab]||1;const orderLines=fProds.map(p=>[0,0,{product_id:p.odooId||false,name:p.name,product_uom_qty:p.qty,price_unit:p.price}]);await odooCall('sale.order','create',[{partner_id:partnerId,company_id:coId,x_studio_shipping_address_4:addr,x_studio_pk:parseInt((document.getElementById('pf-PK')||{}).value)||0,x_studio_c:parseInt((document.getElementById('pf-C')||{}).value)||0,x_studio_z:parseInt((document.getElementById('pf-Z')||{}).value)||0,x_studio_d:parseInt((document.getElementById('pf-D')||{}).value)||0,x_studio_on:selOn,x_studio_2day:sel2d,order_line:orderLines}],{});await loadSalesOrders();closeNew();}catch(e){showErr('Failed to create order: '+e.message);}hideLoading();}
+function exportCSV(){const h=['Order Ref','SO','Company','Customer','Address','Carrier','Products','ON','2DAY'];const rows=done.map(o=>[o.ref,o.so,o.ref.split('/')[0],o.customer,'"'+o.address+'"',o.carrier,'"'+o.products.map(p=>p.name+' x'+p.demand).join(' | ')+'"',o.on?'Yes':'No',o.twoday?'Yes':'No'].join(','));const csv=[h.join(','),...rows].join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='pnd_completed_'+new Date().toISOString().slice(0,10)+'.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);}
+renderDash();syncAll();setInterval(syncAll,3*60*1000);
 </script>
 </body>
 </html>
