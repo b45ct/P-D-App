@@ -651,14 +651,25 @@ async function confirmSO(){
   try {
     await odooAuth();
     await odooCall('sale.order','action_confirm',[[curSO.odooId]],{});
-    // Create and post invoice using data already in curSO
+    // Create and post invoice linked to the SO
     try {
-      const invLines = curSO.products.map(p=>[0,0,{name:p.name,quantity:p.qty,price_unit:p.price}]);
+      const invLines = curSO.products.map(p=>[0,0,{
+        name:p.name,
+        quantity:p.qty,
+        price_unit:p.price,
+        product_id:p.odooId||false,
+      }]);
       const invId = await odooCall('account.move','create',[{
         move_type:'out_invoice',
         invoice_origin:curSO.ref,
         partner_id:curSO._partnerId||false,
-        invoice_line_ids:invLines
+        invoice_line_ids:invLines,
+        // Link to sale order
+        line_ids: [],
+      }],{});
+      // Link invoice to sale order
+      await odooCall('sale.order','write',[[curSO.odooId],{
+        invoice_ids:[[4, invId]]
       }],{});
       await odooCall('account.move','action_post',[[invId]],{});
       curSO._invId = invId;
@@ -687,6 +698,36 @@ function cancelStep(){
     _cancelReady = false;
     cancelSO();
   }
+}
+
+async function pushToDelivery(){
+  showLoading('Releasing delivery...');
+  try {
+    await odooAuth();
+    // Find the picking for this SO and confirm it
+    const picks = await odooCall('stock.picking','search_read',
+      [[['origin','=',curSO.ref],['picking_type_code','=','outgoing'],['state','in',['draft','waiting','confirmed']]]],
+      {fields:['id','state'],limit:5}
+    );
+    if(!picks.length) {
+      // No picking yet - need to confirm SO to create it
+      showErr('No delivery found. Make sure the order is confirmed in Odoo.');
+      hideLoading();
+      return;
+    }
+    // Confirm/assign the picking
+    for(const pick of picks){
+      if(pick.state==='draft') await odooCall('stock.picking','action_confirm',[[pick.id]],{});
+      await odooCall('stock.picking','action_assign',[[pick.id]],{});
+    }
+    curSO._pushed = true;
+    showErr(''); 
+    hideLoading();
+    showLoading('Syncing...');
+    await syncAll();
+    goBackS();
+  } catch(e){ showErr('Push to delivery failed: '+e.message); }
+  hideLoading();
 }
 
 async function cancelSO(){
