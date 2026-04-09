@@ -204,7 +204,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 // ── ODOO CONFIG ──
 const ODOO_URL = 'https://newempire.odoo.com';
 const PROXY = 'https://pnd-proxy.vercel.app';
-function proxyUrl(url){ return PROXY + new URL(url).pathname + new URL(url).search; }
+function proxyUrl(url){ const u = new URL(url); return PROXY + u.pathname + u.search; }
 const ODOO_DB  = 'newempire';
 const ODOO_USER = 'b45ct';
 const ODOO_KEY  = '63cf6933dd137e43743ac80ca72d1e2ef14b61b2';
@@ -225,7 +225,6 @@ async function odooCall(model, method, args, kwargs={}) {
         context: {}
       }
     }),
-    credentials: 'include'
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error.data?.message || JSON.stringify(data.error));
@@ -240,7 +239,6 @@ async function odooAuth() {
       jsonrpc: '2.0', method: 'call', id: 1,
       params: {db: ODOO_DB, login: ODOO_USER, password: ODOO_KEY}
     }),
-    credentials: 'include'
   });
   const data = await res.json();
   if (!data.result?.uid) throw new Error('Authentication failed');
