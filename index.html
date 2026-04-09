@@ -211,6 +211,7 @@ const ODOO_KEY  = 'Bitchass123!';
 
 // Company IDs — will be resolved on first load
 let companyMap = {pup: null, bf: null, wu: null};
+let warehouseMap = {pup: null, bf: null, wu: null};
 
 // ── ODOO API ──
 async function odooCall(model, method, args, kwargs={}) {
@@ -327,6 +328,14 @@ async function loadCompanies() {
     if(n.includes('PUP')) companyMap.pup = c.id;
     else if(n.includes('BF'))  companyMap.bf  = c.id;
     else if(n.includes('WU'))  companyMap.wu  = c.id;
+  });
+  // Load warehouses
+  const whs = await odooCall('stock.warehouse','search_read',[[]], {fields:['id','name','company_id'], limit:50});
+  whs.forEach(w => {
+    const n = w.name.toUpperCase();
+    if(n.includes('PUP')) warehouseMap.pup = w.id;
+    else if(n.includes('BF')) warehouseMap.bf = w.id;
+    else if(n.includes('WU')) warehouseMap.wu = w.id;
   });
 }
 
@@ -822,9 +831,11 @@ async function submitOrder(){
       price_unit: p.price,
     }]);
     // Create sale order
+    const whId = warehouseMap[atab] || false;
     const soId=await odooCall('sale.order','create',[{
       partner_id: partnerId,
       company_id: coId,
+      warehouse_id: whId,
       x_studio_shipping_address_4: addr,
       x_studio_pk: parseInt((document.getElementById('pf-PK')||{}).value)||0,
       x_studio_c: parseInt((document.getElementById('pf-C')||{}).value)||0,
