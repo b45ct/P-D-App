@@ -235,10 +235,26 @@ async function odooCall(model, method, args, kwargs={}) {
   return data.result;
 }
 
-let _uid = null;
-let _sessionId = null;
+// Direct JSON-RPC call with credentials on every request
+async function odooCall(model, method, args, kwargs={}) {
+  const res = await fetch(proxyUrl(ODOO_URL + '/web/dataset/call_kw'), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      jsonrpc: '2.0', method: 'call', id: Math.random(),
+      params: {
+        model, method,
+        args, kwargs,
+        context: {},
+      }
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.data?.message || JSON.stringify(data.error));
+  return data.result;
+}
+
 async function odooAuth() {
-  if (_uid) return _uid;
   const res = await fetch(proxyUrl(ODOO_URL + '/web/session/authenticate'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -249,9 +265,7 @@ async function odooAuth() {
   });
   const data = await res.json();
   if (!data.result?.uid) throw new Error(data.error?.data?.message || 'Authentication failed');
-  _uid = data.result.uid;
-  _sessionId = data.result.session_id;
-  return _uid;
+  return data.result.uid;
 }
 
 // ── APP STATE ──
@@ -291,8 +305,10 @@ function showErr(msg){const b=document.getElementById('err-bar');b.textContent=m
 async function syncAll() {
   showLoading('Syncing with Odoo...');
   try {
+    // Fresh auth each sync to maintain session through proxy
     await odooAuth();
-    await Promise.all([loadCompanies(), loadProducts(), loadCustomers()]);
+    await loadCompanies();
+    await Promise.all([loadProducts(), loadCustomers()]);
     await Promise.all([loadSalesOrders(), loadDeliveries()]);
     document.getElementById('sync-bar').style.display='flex';
     document.getElementById('sync-msg').textContent='Last synced: '+new Date().toLocaleTimeString();
