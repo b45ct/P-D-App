@@ -377,6 +377,19 @@ async function loadSalesOrders() {
     lineMap[l.order_id[0]].push(l);
   });
 
+  // Load invoice data in one batch
+  const allInvIds = orders.flatMap(o=>o.invoice_ids||[]);
+  let invMap = {};
+  if(allInvIds.length) {
+    try {
+      const invs = await odooCall('account.move','search_read',
+        [[['id','in',allInvIds],['state','=','posted']]],
+        {fields:['id','amount_residual','amount_total'],limit:500}
+      );
+      invs.forEach(inv => { invMap[inv.id] = inv; });
+    } catch(e){}
+  }
+
   salesOrders = {pup:[],bf:[],wu:[]};
   orders.forEach(o => {
     const coId = o.company_id[0];
@@ -388,24 +401,13 @@ async function loadSalesOrders() {
       price: l.price_unit,
       odooId: l.product_id[0]
     }));
-    const stateMap = {draft:'draft', sale:'confirmed', done:'paid'};
-    const isPaid = o.state==='done';
-    // Get payments from invoices
     let amtPaid = 0;
-    let payments = [];
     let invId = null;
-    if(o.invoice_ids && o.invoice_ids.length) {
-      invId = o.invoice_ids[0];
-      try {
-        const invs = await odooCall('account.move','search_read',
-          [[['id','in',o.invoice_ids],['state','=','posted']]],
-          {fields:['id','amount_residual','amount_total','payment_state'],limit:10}
-        );
-        invs.forEach(inv => {
-          amtPaid += (inv.amount_total - inv.amount_residual);
-        });
-      } catch(e){}
-    }
+    let payments = [];
+    (o.invoice_ids||[]).forEach(iid => {
+      const inv = invMap[iid];
+      if(inv){amtPaid += (inv.amount_total - inv.amount_residual);if(!invId)invId=iid;}
+    });
     const status = amtPaid >= o.amount_total && o.amount_total > 0 ? 'paid' : (o.state==='sale'?'confirmed':'draft');
     salesOrders[coKey].push({
       id: o.id,
