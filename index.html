@@ -618,7 +618,8 @@ function renderSalesDet(){
         '<div class="pmg" id="pm-g">'+PAY_METHODS.map(m=>'<button class="pm" id="pm-'+m+'" onclick="selPM(\''+m+'\')" style="'+(o.payMethod===m?'background:#111;color:#fff;border-color:#111;':'')+'">'+m+'</button>').join('')+'</div>'+
         '<div class="partwrap"><div class="partlbl">Amount Received</div>'+
         '<div class="partrow"><span class="partsym">$</span><input class="partinput" type="number" id="amt" step="0.01" min="0" placeholder="'+total.toFixed(2)+'" value="'+total.toFixed(2)+'"></div>'+
-        '<div class="parttot">Order total: '+fmt(total)+'</div></div>'+
+        '<div class="parttot">Remaining: '+fmt(Math.max(0,total-amtPaid))+(amtPaid>0?' &middot; Paid: '+fmt(amtPaid):'')+'</div></div>'+
+        (o.payments&&o.payments.length?'<div class="ablbl">Payment History</div><div style="background:#f9f9f9;border-radius:10px;padding:10px 14px;margin-bottom:10px;">'+o.payments.map(p=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #e5e5e5;"><span>'+p.date+' &middot; '+p.method+'</span><span style="font-weight:500;">'+fmt(p.amount)+'</span></div>').join('')+'<div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;font-weight:600;"><span>Total Paid</span><span>'+fmt(amtPaid)+'</span></div></div>':'')+
         '<button class="abtn bp2" onclick="markPaid()">Mark as Paid</button>':'<button class="abtn boff">Mark as Paid</button>')+
     '</div>':'<div style="height:16px;"></div>');
 }
@@ -678,25 +679,33 @@ function selPM(m){
 
 async function markPaid(){
   const inp=document.getElementById('amt');
-  const amount=Math.min(parseFloat(inp?inp.value:0)||curSO.total,curSO.total);
+  const amount=parseFloat(inp?inp.value:0)||0;
+  if(!amount||amount<=0){showErr('Please enter a valid amount.');return;}
+  const cappedAmount=Math.min(amount,curSO.total-(curSO.amountPaid||0));
   showLoading('Registering payment...');
   try {
     await odooAuth();
-    // Create invoice
-    const invIds = await odooCall('sale.order','_create_invoices',[[curSO.odooId]],{});
-    // Confirm invoice
-    const invId = Array.isArray(invIds) ? invIds[0] : invIds;
-    await odooCall('account.move','action_post',[[invId]],{});
-    // Register payment
-    const journalId = JOURNAL_MAP[curSO.payMethod] || 1;
+    // Get or create invoice
+    let invId = curSO._invId;
+    if(!invId){
+      const invIds = await odooCall('sale.order','_create_invoices',[[curSO.odooId]],{});
+      invId = Array.isArray(invIds) ? invIds[0] : invIds;
+      await odooCall('account.move','action_post',[[invId]],{});
+      curSO._invId = invId;
+    }
+    const journalId = JOURNAL_MAP[curSO.payMethod] || 16;
     await odooCall('account.payment.register','create',[{
-      amount: amount,
+      amount: cappedAmount,
       journal_id: journalId,
       payment_date: new Date().toISOString().slice(0,10),
       communication: curSO.ref,
     }],{});
-    curSO.amountPaid=amount;
-    curSO.status='paid';
+    // Track payments locally
+    if(!curSO.payments) curSO.payments = [];
+    curSO.payments.push({amount: cappedAmount, method: curSO.payMethod, date: new Date().toLocaleDateString()});
+    curSO.amountPaid = (curSO.amountPaid||0) + cappedAmount;
+    // Only mark as paid if fully paid
+    if(curSO.amountPaid >= curSO.total) curSO.status='paid';
     renderSalesDet();renderTabs();
   } catch(e){ showErr('Payment failed: '+e.message); }
   hideLoading();
